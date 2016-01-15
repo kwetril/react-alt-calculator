@@ -1,0 +1,286 @@
+var alt = new Alt();
+
+class CalculatorActions {
+  resetState() {
+    this.dispatch();
+  }
+  eraseDigit() {
+    this.dispatch();
+  }
+  inputNumberElement(element) {
+    this.dispatch(element);
+  }
+  setOperation(operation) {
+    this.dispatch(operation);
+  }
+  calculateResult() {
+    this.dispatch();
+  }
+}
+
+var actions = alt.createActions(CalculatorActions);
+
+class CalculatorStore {
+  constructor() {
+    this.value = '';
+    this.firstArgument = null;
+    this.operation = null;
+    this.errState = 0;
+    this.maxDigits = 10;
+    this.bindListeners({
+      handleResetState: actions.RESET_STATE,
+      handleEraseDigit: actions.ERASE_DIGIT,
+      handleInputNumberElement: actions.INPUT_NUMBER_ELEMENT,
+      handleSetOperation: actions.SET_OPERATION,
+      handleCalculateResult: actions.CALCULATE_RESULT
+    });    
+    this.exportPublicMethods({
+      getValue: this.getValue
+    });
+  }
+  handleResetState() {
+    this.value = '';
+    this.operation = null;
+    this.firstArgument = null;
+    this.errState = 0;
+  }
+  handleEraseDigit() {
+    if (this.errState > 0) {
+      return;
+    }
+    this.value = this.value.slice(0, -1);
+  }
+  handleInputNumberElement(element) {
+    if (this.errState > 0) {
+      return;
+    }
+    if (element == "\xB7") {
+      if (this.value == '') {
+        this.value = '0.';
+      } else if (this.value.indexOf('.') == -1) {
+        this.value += '.';
+      }
+    } else {
+      if (this.value == null) {
+        this.value = element;
+      } else {
+        if ((this.value + element).replace(/[^0-9]/g,"").length <= this.maxDigits) {
+          this.value += element;  
+        }        
+      }
+    }
+  }
+  handleSetOperation(operation) {
+    if (this.errState > 0) {
+      return;
+    }
+    if (this.firstArgument != null || this.value != '') {
+      if (operation == '\u221A') {
+        if (this.value == '') {
+          this.value = this.firstArgument;
+          this.firstArgument = null;
+        }
+        this.value = this.processResult(Math.sqrt(parseFloat(this.value)));
+        return;        
+      } else if (operation == '\xB1') {
+        if (this.value == '') {
+          this.value = this.firstArgument;
+          this.firstArgument = null;
+        }
+        if (this.value[0] == '-') {
+          this.value = this.value.substring(1);
+        } else {
+          this.value = '-' + this.value;
+        }
+        return;
+      } else if (this.firstArgument == null) {
+        this.firstArgument = this.value;
+        this.value = '';
+      } else if (this.value != '') {
+        this.handleCalculateResult();        
+      }
+      this.operation = operation;
+    }    
+  }
+  handleCalculateResult() {
+    if (this.errState > 0 || this.operation == null) {
+      return;
+    }
+    var first = parseFloat(this.firstArgument);
+    if (this.value == '') {
+      this.value = this.firstArgument;
+    }
+    var second = parseFloat(this.value);
+    var result;
+    switch (this.operation) {
+      case '\xD7':
+        result = first * second;
+        break;
+      case '+':
+        result = first + second;
+        break;
+      case '-':
+        result = first - second;
+        break;
+      case '\xF7':
+        result = first / second;
+        break;              
+    }                    
+    this.operation = null;
+    this.firstArgument = this.processResult(result);
+    this.value = '';
+  }
+  processResult(result) {
+    var intLen = (Math.abs(result).toFixed(0) + '').length;
+    if (intLen > this.maxDigits || isNaN(result) || !isFinite(result)) {
+      this.errState = 1;
+      return "error";
+    }
+    var value = result.toFixed(this.maxDigits - intLen) + '';
+    if (value.indexOf('.') != -1) {
+      value = value.replace(/0*$/, "");
+      value = value.replace(/\.$/, "");
+    }
+    return value;
+  }
+  getValue() {
+    if (this.state.value == '' && this.state.firstArgument != null) {
+      return this.state.firstArgument;
+    }
+    return this.state.value;
+  }
+}
+
+var store = alt.createStore(CalculatorStore, 'CalculatorStore');
+
+var CalculatorButton = React.createClass({
+  render: function() {
+    var btnType = (this.props.type || "single") + "-btn";
+    var btnColor = this.props.color || "dark";
+    return ( <input type = "button"
+      onClick = {this.clickHandler}
+      className = {[btnType, btnColor].join(' ')}
+      value = {this.props.text} />
+    );
+  },    
+  clickHandler: function() {    
+    switch(this.props.text) {
+      case 'C':
+        actions.resetState();
+        break;
+      case '\u2190':
+        actions.eraseDigit();
+        break;
+      case '0':
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+      case '7':
+      case '8':
+      case '9':
+      case '00':
+      case '\xB7':
+        actions.inputNumberElement(this.props.text);
+        break;
+      case '=':
+        actions.calculateResult();
+        break;
+      default:
+        actions.setOperation(this.props.text);
+    }
+  }
+});
+
+var CalculatorScreen = React.createClass({
+  getInitialState: function() {
+    return store.getState();
+  },
+  componentDidMount: function() {
+    store.listen(this.stateChanged);
+  },
+  stateChanged: function(state) {
+    this.setState(state);
+  },
+  displayValue: function(value) {
+    if (isNaN(parseFloat(value))) {
+      return value;
+    } else {
+      return this.formatToDisplay(value, '.', "'")
+    }
+  },
+  render: function() {
+    return ( <p className="calculator-screen" >{this.displayValue(store.getValue())}</p>
+    )
+  },
+  formatToDisplay: function(number, delimiter, groupSep) {  
+    var sign = '';
+    if(number[0] == "-") {
+      sign = "-";
+      number = number.substring(1);
+    }
+    var numberParts = number.split('.');
+    var intPart = numberParts[0];
+    var fractPart = '';
+    if (numberParts.length > 1) {
+      fractPart = delimiter + numberParts[1].replace(/(\d{3})(?=\d)/g, "$1" + groupSep);
+    }  
+    var numStartDigits = (intPart.length > 3) ? intPart.length % 3 : 0;
+    var displyIntegerPart = (numStartDigits ? intPart.substr(0, numStartDigits) + groupSep : "") 
+      + intPart.substr(numStartDigits).replace(/(\d{3})(?=\d)/g, "$1" + groupSep)
+    return sign + displyIntegerPart + fractPart;    
+  }
+});
+
+var Calculator = React.createClass({
+  render: function() {
+    return ( 
+      <div className="calculator">
+        <p className='calculator-label'>Calculator 10 digits</p>
+        < div className="calculator-screen-container">
+            <CalculatorScreen />
+        </div>
+        <div className="calculator-buttons-container">
+          <div className="button-column" >
+            <CalculatorButton type="double" color="orange" text="C" />
+            <CalculatorButton text="&larr;" />
+            <CalculatorButton text="&plusmn;" />
+          </div>
+          <div className="button-column">
+            <CalculatorButton color="light" text="7" />
+            <CalculatorButton color="light" text="4" />
+            <CalculatorButton color="light" text="1" />
+            <CalculatorButton color="light" text="0" />      
+          </div>
+          <div className="button-column">
+            <CalculatorButton color="light" text="8" />
+            <CalculatorButton color="light" text="5" />
+            <CalculatorButton color="light" text="2" />
+            <CalculatorButton color="light" text="00" />
+          </div>
+          <div className="button-column">
+            <CalculatorButton color="light" text="9" />      
+            <CalculatorButton color="light" text="6" />
+            <CalculatorButton color="light" text="3" />
+            <CalculatorButton color="light" text="&middot;" />
+          </div>
+          <div className="button-column">
+            <CalculatorButton text="&times;" />
+            <CalculatorButton text="-" />
+            <CalculatorButton type="double" text="+" />      
+          </div>
+          <div className="button-column">
+            <CalculatorButton text="&divide;" />
+            <CalculatorButton text="&radic;" />
+            <CalculatorButton type="double" text="=" />      
+          </div>
+        </div>
+      </div>
+    )
+  }
+});
+
+React.render( <Calculator /> ,
+  document.getElementById('calculator-container'));
